@@ -38,7 +38,7 @@
 
     <div class="container">
         <video id="input_video"></video>
-        <canvas id="output_canvas"></canvas>
+        <canvas id="output_canvas" width="640" height="480"></canvas>
         
         <div class="feedback-overlay">
             <div>👀 Eye Contact: <span id="score-eye">--</span></div>
@@ -100,7 +100,7 @@
                         persona: "FAANG_Architect",
                         difficulty: "Intermediate", 
                         topic: "System Design",
-                        resume_text: null
+                        resume_text: ""
                     })
                 });
                 const data = await response.json();
@@ -185,8 +185,28 @@
                 
                 if (data.status === "success") {
                     document.getElementById('resume-status').innerText = "✅ Resume Analyzed!";
-                    document.getElementById('ai-response').innerText = data.intro;
-                    speakText(data.intro);
+                    // Restart session with resume context so AI uses it
+                    const resumeText = data.text;
+                    try {
+                        const res = await fetch("http://localhost:8000/start_interview", {
+                            method: "POST",
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                persona: "FAANG_Architect",
+                                difficulty: "Intermediate",
+                                topic: "System Design",
+                                resume_text: resumeText
+                            })
+                        });
+                        const sessionData = await res.json();
+                        sessionId = sessionData.session_id;
+                        connectWebSocket(sessionId);
+                        const opening = sessionData.opening_question || "Resume loaded! Let's begin.";
+                        document.getElementById('ai-response').innerText = opening;
+                        speakText(opening);
+                    } catch(e) {
+                        document.getElementById('ai-response').innerText = "Resume uploaded! Click Reset Session to start.";
+                    }
                 } else {
                     document.getElementById('resume-status').innerText = "❌ Error";
                 }
@@ -197,17 +217,18 @@
         }
 
         function updateDashboard(metrics) {
-            // Legacy metrics (from backend)
-            document.getElementById('score-eye').innerText = metrics.eye_contact_score || "--";
-            document.getElementById('score-fidget').innerText = metrics.fidget_score || "0";
-            document.getElementById('score-smile').innerText = metrics.is_smiling ? "Yes" : "No";
+            // Legacy metrics
+            document.getElementById('score-eye').innerText = (metrics.eye_contact_score || 0).toFixed(2);
+            document.getElementById('score-fidget').innerText = (metrics.fidget_score || 0).toFixed(2);
+            document.getElementById('score-smile').innerText = metrics.is_smiling ? "😊 Yes" : "No";
             document.getElementById('score-gesture').innerText = metrics.head_gesture || "-";
-            
-            const eyeBox = document.getElementById('score-eye').parentElement;
-            eyeBox.style.color = metrics.eye_contact_score < 0.5 ? '#ff4444' : '#fff';
-            
-            // Posture metrics are updated in real-time by updatePostureUI()
-            // No need to update them here to avoid conflicts
+            document.getElementById('score-eye').parentElement.style.color = 
+                (metrics.eye_contact_score || 0) < 0.5 ? '#ff4444' : '#fff';
+
+            // Posture from backend if available
+            if (metrics.posture) {
+                updatePostureUI(metrics.posture);
+            }
         }
         
         // NEW: Draw pose skeleton on canvas (MediaPipe Pose)
@@ -246,9 +267,7 @@
         }
 
         // --- DUAL MEDIAPIPE SYSTEM (FaceMesh + Pose) ---
-        let currentLandmarks = null;
         let currentPoseLandmarks = null;
-        let lastSentTime = 0;
         
         // FaceMesh results (for eye contact, etc.)
         function onFaceResults(results) {
@@ -261,13 +280,13 @@
         function onPoseResults(results) {
             canvasCtx.save();
             canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-            canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
-            
-            // Draw face mesh if available
+
+            // Draw face mesh if available (no drawImage - video shows through underneath)
             if (currentLandmarks) {
                 drawConnectors(canvasCtx, currentLandmarks, FACEMESH_TESSELATION, {color: '#C0C0C070', lineWidth: 1});
-                drawConnectors(canvasCtx, currentLandmarks, FACEMESH_RIGHT_EYE, {color: '#FF3030'});
-                drawConnectors(canvasCtx, currentLandmarks, FACEMESH_LEFT_EYE, {color: '#30FF30'});
+                drawConnectors(canvasCtx, currentLandmarks, FACEMESH_RIGHT_EYE, {color: '#FF3030', lineWidth: 2});
+                drawConnectors(canvasCtx, currentLandmarks, FACEMESH_LEFT_EYE, {color: '#30FF30', lineWidth: 2});
+                drawConnectors(canvasCtx, currentLandmarks, FACEMESH_LIPS, {color: '#E0E0E0', lineWidth: 1});
             }
             
             // Store pose landmarks

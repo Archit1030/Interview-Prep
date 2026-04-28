@@ -14,7 +14,15 @@ export const Cockpit = ({ sessionId, initialQuestion, config, onEnd }) => {
     eye: 0, 
     fidget: 0, 
     smile: false, 
-    stress: false 
+    stress: false,
+    posture: {
+      shoulder_angle: 0,
+      is_leaning: false,
+      is_slouching: false,
+      slouch_score: 0,
+      arms_crossed: false,
+      shoulder_stability: 1.0
+    }
   });
   const [transcript, setTranscript] = useState(initialQuestion || "System Online");
   const [aiState, setAiState] = useState('idle');
@@ -90,7 +98,11 @@ export const Cockpit = ({ sessionId, initialQuestion, config, onEnd }) => {
           eye: data.metrics.eye_contact_score || 0,
           fidget: data.metrics.fidget_score || 0,
           smile: data.metrics.is_smiling || false,
-          stress: data.metrics.is_stressed || false
+          stress: data.metrics.is_stressed || false,
+          posture: data.metrics.posture || {
+            shoulder_angle: 0, is_leaning: false, is_slouching: false,
+            slouch_score: 0, arms_crossed: false, shoulder_stability: 1.0
+          }
         });
       }
       
@@ -141,7 +153,11 @@ export const Cockpit = ({ sessionId, initialQuestion, config, onEnd }) => {
     // 3. Audio Setup Helper
     const setupAudioRecorder = (stream) => {
       try {
-        const recorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
+        const mimeType = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg', '']
+          .find(m => m === '' || MediaRecorder.isTypeSupported(m));
+        const recorder = mimeType
+          ? new MediaRecorder(stream, { mimeType })
+          : new MediaRecorder(stream);
         mediaRecorderRef.current = recorder;
         
         recorder.ondataavailable = (e) => {
@@ -174,36 +190,38 @@ export const Cockpit = ({ sessionId, initialQuestion, config, onEnd }) => {
     // 4. Camera Setup with Zombie Prevention
     const setupCamera = async () => {
       try {
-        // Stop any existing tracks on the ref just in case
         if (videoRef.current && videoRef.current.srcObject) {
           videoRef.current.srcObject.getTracks().forEach(t => t.stop());
         }
 
-        const stream = await navigator.mediaDevices.getUserMedia({ 
-          video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" }, 
+        // Get video and audio as SEPARATE streams to prevent audio track death
+        const videoStream = await navigator.mediaDevices.getUserMedia({ 
+          video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" }
+        });
+
+        const audioStream = await navigator.mediaDevices.getUserMedia({ 
           audio: { echoCancellation: true, noiseSuppression: true }
         });
 
-        // 🚨 ZOMBIE CHECK: Did we unmount while waiting for the user to click "Allow"?
         if (!isMounted) {
-            console.warn("Camera permission granted AFTER unmount. Closing stream immediately.");
-            stream.getTracks().forEach(track => track.stop());
-            return;
+          videoStream.getTracks().forEach(t => t.stop());
+          audioStream.getTracks().forEach(t => t.stop());
+          return;
         }
-        
-        myStream = stream; // Assign to local var for cleanup closure
+
+        myStream = videoStream;
         console.log("✅ Camera granted and active");
 
         if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          // Wait for video to be ready before attaching AI
+          videoRef.current.srcObject = videoStream;
           videoRef.current.onloadedmetadata = () => {
-             videoRef.current.play();
-             initializeFaceMesh(videoRef.current);
+            videoRef.current.play();
+            initializeFaceMesh(videoRef.current);
           };
         }
 
-        setupAudioRecorder(stream);
+        // Setup recorder with AUDIO-ONLY stream
+        setupAudioRecorder(audioStream);
 
       } catch (err) {
         if (!isMounted) return;
@@ -240,15 +258,19 @@ export const Cockpit = ({ sessionId, initialQuestion, config, onEnd }) => {
 
   const toggleRecording = () => {
     if (!mediaRecorderRef.current) return;
+    const state = mediaRecorderRef.current.state;
     if (isRecording) {
-      mediaRecorderRef.current.stop();
+      if (state === 'recording') mediaRecorderRef.current.stop();
       setIsRecording(false);
       window.speechSynthesis.cancel();
     } else {
-      mediaRecorderRef.current.start();
-      setIsRecording(true);
-      setAiState('listening');
-      setTranscript("Listening...");
+      if (state === 'inactive') {
+        audioChunksRef.current = [];
+        mediaRecorderRef.current.start();
+        setIsRecording(true);
+        setAiState('listening');
+        setTranscript("Listening...");
+      }
     }
   };
 
@@ -332,27 +354,74 @@ export const Cockpit = ({ sessionId, initialQuestion, config, onEnd }) => {
       </div>
 
       {/* Right Sidebar */}
-      <div className="w-96 bg-black border-l border-white/10 flex flex-col">
-        <div className="flex-1 flex flex-col items-center justify-center p-8">
-          <div className={`relative w-40 h-40 rounded-full border-4 flex items-center justify-center transition-all ${
+      <div className="w-96 bg-black border-l border-white/10 flex flex-col overflow-y-auto">
+        {/* AI State */}
+        <div className="flex flex-col items-center justify-center p-8 border-b border-white/10">
+          <div className={`relative w-32 h-32 rounded-full border-4 flex items-center justify-center transition-all ${
             aiState === 'speaking' ? 'border-blue-500 shadow-blue-500/50' :
             aiState === 'listening' ? 'border-red-500 shadow-red-500/50' : 'border-gray-700'
           } shadow-lg`}>
-            {aiState === 'listening' ? <Mic className="text-red-500" size={64} /> : 
-             aiState === 'processing' ? <div className="w-16 h-16 border-4 border-yellow-500 border-t-transparent rounded-full animate-spin" /> :
-             <BrainCircuit className="text-blue-400" size={64} />}
+            {aiState === 'listening' ? <Mic className="text-red-500" size={52} /> : 
+             aiState === 'processing' ? <div className="w-12 h-12 border-4 border-yellow-500 border-t-transparent rounded-full animate-spin" /> :
+             <BrainCircuit className="text-blue-400" size={52} />}
           </div>
-          <div className="mt-6 text-center">
-            <div className="text-sm font-mono text-gray-500 tracking-widest">{aiState.toUpperCase()} MODE</div>
+          <div className="mt-4 text-center">
+            <div className="text-xs font-mono text-gray-500 tracking-widest">{aiState.toUpperCase()} MODE</div>
           </div>
         </div>
-        <div className="p-6 border-t border-white/10">
+
+        {/* Posture Panel */}
+        <div className="p-6 border-b border-white/10">
+          <div className="text-xs font-mono text-gray-400 tracking-widest mb-4">POSTURE ANALYSIS</div>
+          <div className="space-y-3">
+            {/* Shoulder Angle */}
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-gray-400">Shoulder Angle</span>
+              <span className={`text-sm font-bold ${metrics.posture.is_leaning ? 'text-red-400' : 'text-emerald-400'}`}>
+                {metrics.posture.shoulder_angle?.toFixed(1)}° {metrics.posture.is_leaning ? '⚠' : '✓'}
+              </span>
+            </div>
+            {/* Slouch */}
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-gray-400">Slouch</span>
+              <span className={`text-sm font-bold ${metrics.posture.is_slouching ? 'text-red-400' : 'text-emerald-400'}`}>
+                {metrics.posture.is_slouching ? `⚠ ${(metrics.posture.slouch_score * 100).toFixed(0)}%` : '✓ Good'}
+              </span>
+            </div>
+            {/* Arms */}
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-gray-400">Arms</span>
+              <span className={`text-sm font-bold ${metrics.posture.arms_crossed ? 'text-red-400' : 'text-emerald-400'}`}>
+                {metrics.posture.arms_crossed ? '⚠ Crossed' : '✓ Open'}
+              </span>
+            </div>
+            {/* Stability */}
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-gray-400">Stability</span>
+              <span className={`text-sm font-bold ${metrics.posture.shoulder_stability > 0.7 ? 'text-emerald-400' : 'text-yellow-400'}`}>
+                {((metrics.posture.shoulder_stability || 1) * 100).toFixed(0)}%
+              </span>
+            </div>
+            {/* Overall posture bar */}
+            <div className="mt-2">
+              <div className="w-full h-1.5 bg-gray-800 rounded-full overflow-hidden">
+                <div className={`h-full rounded-full transition-all ${
+                  !metrics.posture.is_leaning && !metrics.posture.is_slouching && !metrics.posture.arms_crossed
+                    ? 'bg-emerald-500' : 'bg-red-500'
+                }`} style={{ width: `${metrics.posture.shoulder_stability * 100}%` }} />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Record Button */}
+        <div className="p-6 mt-auto">
           <button
             onClick={toggleRecording}
             disabled={aiState === 'processing' || aiState === 'speaking'}
             className={`w-full py-8 rounded-2xl font-bold text-lg tracking-wider transition-all shadow-2xl flex items-center justify-center gap-3 ${
               isRecording ? 'bg-red-500 text-white' : 'bg-blue-600 text-white'
-            }`}
+            } disabled:opacity-50 disabled:cursor-not-allowed`}
           >
             {isRecording ? "STOP RECORDING" : "HOLD TO SPEAK"}
           </button>

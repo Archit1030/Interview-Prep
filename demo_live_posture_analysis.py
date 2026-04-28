@@ -183,8 +183,8 @@ def main():
     
     input("\nPress Enter to start...")
     
-    # Open webcam
-    cap = cv2.VideoCapture(0)
+    # Open webcam (CAP_MSMF works on Windows)
+    cap = cv2.VideoCapture(0, cv2.CAP_MSMF)
     
     if not cap.isOpened():
         print("❌ Error: Could not open webcam")

@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interview Mirror - Quick Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #1a1a1a;
+            color: #fff;
+        }
+        .container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        .panel {
+            background: #2a2a2a;
+            padding: 20px;
+            border-radius: 8px;
+        }
+        video {
+            width: 100%;
+            border-radius: 8px;
+            background: #000;
+        }
+        button {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background: #45a049;
+        }
+        button:disabled {
+            background: #666;
+            cursor: not-allowed;
+        }
+        .metrics {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+            margin-top: 10px;
+        }
+        .metric {
+            background: #333;
+            padding: 10px;
+            border-radius: 4px;
+        }
+        .metric-label {
+            font-size: 12px;
+            color: #888;
+        }
+        .metric-value {
+            font-size: 20px;
+            font-weight: bold;
+            color: #4CAF50;
+        }
+        #status {
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 10px;
+        }
+        .status-online {
+            background: #2d5016;
+            color: #90EE90;
+        }
+        .status-offline {
+            background: #5a1a1a;
+            color: #ff6b6b;
+        }
+        #log {
+            background: #1a1a1a;
+            padding: 10px;
+            border-radius: 4px;
+            max-height: 200px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <h1>🎯 Interview Mirror - System Test</h1>
+    
+    <div id="status" class="status-offline">
+        ⚠️ Checking backend connection...
+    </div>
+
+    <div class="container">
+        <div class="panel">
+            <h2>📹 Video Feed</h2>
+            <video id="video" autoplay playsinline></video>
+            <div>
+                <button id="startBtn" onclick="startInterview()">Start Interview</button>
+                <button id="stopBtn" onclick="stopInterview()" disabled>Stop Interview</button>
+            </div>
+        </div>
+
+        <div class="panel">
+            <h2>📊 Real-time Metrics</h2>
+            <div class="metrics">
+                <div class="metric">
+                    <div class="metric-label">Eye Contact</div>
+                    <div class="metric-value" id="eyeContact">--</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-label">Posture</div>
+                    <div class="metric-value" id="posture">--</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-label">Stress Level</div>
+                    <div class="metric-value" id="stress">--</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-label">Fidget Score</div>
+                    <div class="metric-value" id="fidget">--</div>
+                </div>
+            </div>
+            
+            <h3>📝 Activity Log</h3>
+            <div id="log"></div>
+        </div>
+    </div>
+
+    <script>
+        let ws = null;
+        let videoStream = null;
+        let sessionId = null;
+        let frameInterval = null;
+
+        // Check backend status
+        async function checkBackend() {
+            try {
+                const response = await fetch('http://localhost:8000/');
+                const data = await response.json();
+                document.getElementById('status').className = 'status-online';
+                document.getElementById('status').innerHTML = `✅ Backend Online - ${data.version}`;
+                log('Backend connected successfully');
+            } catch (error) {
+                document.getElementById('status').className = 'status-offline';
+                document.getElementById('status').innerHTML = '❌ Backend Offline - Please start the server';
+                log('ERROR: Cannot connect to backend');
+            }
+        }
+
+        function log(message) {
+            const logDiv = document.getElementById('log');
+            const time = new Date().toLocaleTimeString();
+            logDiv.innerHTML = `[${time}] ${message}<br>` + logDiv.innerHTML;
+        }
+
+        async function startInterview() {
+            try {
+                // Get video stream
+                videoStream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { width: 640, height: 480 } 
+                });
+                document.getElementById('video').srcObject = videoStream;
+                log('Camera access granted');
+
+                // Connect WebSocket
+                ws = new WebSocket('ws://localhost:8000/ws');
+                
+                ws.onopen = () => {
+                    log('WebSocket connected');
+                    sessionId = 'test_' + Date.now();
+                    
+                    // Start session
+                    ws.send(JSON.stringify({
+                        type: 'start_session',
+                        session_id: sessionId,
+                        persona: 'Google_SRE',
+                        difficulty: 'Mid-Level'
+                    }));
+                    
+                    document.getElementById('startBtn').disabled = true;
+                    document.getElementById('stopBtn').disabled = false;
+                    
+                    // Start sending frames
+                    startSendingFrames();
+                };
+
+                ws.onmessage = (event) => {
+                    const data = JSON.parse(event.data);
+                    handleMessage(data);
+                };
+
+                ws.onerror = (error) => {
+                    log('WebSocket error: ' + error);
+                };
+
+                ws.onclose = () => {
+                    log('WebSocket disconnected');
+                };
+
+            } catch (error) {
+                log('ERROR: ' + error.message);
+                alert('Error: ' + error.message);
+            }
+        }
+
+        function startSendingFrames() {
+            const video = document.getElementById('video');
+            const canvas = document.createElement('canvas');
+            canvas.width = 640;
+            canvas.height = 480;
+            const ctx = canvas.getContext('2d');
+
+            frameInterval = setInterval(() => {
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                    const frameData = canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
+                    
+                    ws.send(JSON.stringify({
+                        type: 'video_frame',
+                        session_id: sessionId,
+                        frame: frameData
+                    }));
+                }
+            }, 200); // Send frame every 200ms (5 FPS)
+        }
+
+        function handleMessage(data) {
+            if (data.type === 'session_started') {
+                log('Interview session started!');
+            } else if (data.type === 'vision_analysis') {
+                updateMetrics(data);
+            } else if (data.type === 'ai_response') {
+                log('AI: ' + data.text);
+            } else if (data.type === 'error') {
+                log('ERROR: ' + data.message);
+            }
+        }
+
+        function updateMetrics(data) {
+            const metrics = data.metrics || {};
+            
+            document.getElementById('eyeContact').textContent = 
+                metrics.eye_contact_score ? metrics.eye_contact_score.toFixed(2) : '--';
+            
+            document.getElementById('posture').textContent = 
+                metrics.shoulder_angle ? metrics.shoulder_angle.toFixed(1) + '°' : '--';
+            
+            document.getElementById('stress').textContent = 
+                metrics.stress_level || '--';
+            
+            document.getElementById('fidget').textContent = 
+                metrics.fidget_score ? metrics.fidget_score.toFixed(1) : '--';
+        }
+
+        function stopInterview() {
+            if (frameInterval) {
+                clearInterval(frameInterval);
+            }
+            
+            if (ws) {
+                ws.send(JSON.stringify({
+                    type: 'end_session',
+                    session_id: sessionId
+                }));
+                ws.close();
+            }
+            
+            if (videoStream) {
+                videoStream.getTracks().forEach(track => track.stop());
+            }
+            
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('stopBtn').disabled = true;
+            log('Interview stopped');
+        }
+
+        // Check backend on load
+        checkBackend();
+        setInterval(checkBackend, 5000); // Check every 5 seconds
+    </script>
+</body>
+</html>

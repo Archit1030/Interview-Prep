@@ -82,14 +82,15 @@ class AudioEngine:
                 # Fallback to SpeechRecognition (Basic Quality)
                 import speech_recognition as sr
                 recognizer = sr.Recognizer()
-                recognizer.energy_threshold = 300
-                recognizer.dynamic_energy_threshold = True
+                recognizer.energy_threshold = 50   # lowered from 300
+                recognizer.dynamic_energy_threshold = False
                 
                 wav_buffer = io.BytesIO()
                 audio_segment.export(wav_buffer, format="wav", parameters=["-ac", "1", "-ar", "16000"])
                 wav_buffer.seek(0)
                 
                 with sr.AudioFile(wav_buffer) as source:
+                    recognizer.adjust_for_ambient_noise(source, duration=0.2)
                     audio_data = recognizer.record(source)
                 
                 text = recognizer.recognize_google(audio_data)
